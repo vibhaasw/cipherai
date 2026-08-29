@@ -24,12 +24,12 @@ def test_selects_first_healthy_candidate() -> None:
     async def _run() -> None:
         redis = FakeRedis(
             {
-                "quota:mistral:mistral_key_code1": {
+                "quota:mistral:MISTRAL_API_KEY": {
                     "status": "healthy",
                     "remaining_requests": "9",
                     "limit_requests": "10",
                 },
-                "quota:groq:groq_key1": {"status": "near_cap", "remaining_requests": "1", "limit_requests": "30"},
+                "quota:groq:GROQ_API_KEY": {"status": "near_cap", "remaining_requests": "1", "limit_requests": "30"},
             }
         )
         classification = ClassificationResult(
@@ -39,10 +39,11 @@ def test_selects_first_healthy_candidate() -> None:
             est_input_tokens=400,
             est_output_tokens=1500,
         )
-        decision = await select_provider(classification, redis)
+        decision, evaluated = await select_provider(classification, redis)
         assert decision is not None
         assert decision.key_id == "mistral_key_code1"
         assert decision.provider == "mistral"
+        assert len(evaluated) >= 1
 
     asyncio.run(_run())
 
@@ -59,8 +60,9 @@ def test_treats_missing_quota_as_healthy() -> None:
             est_input_tokens=20,
             est_output_tokens=200,
         )
-        decision = await select_provider(classification, redis)
+        decision, evaluated = await select_provider(classification, redis)
         assert decision is not None
         assert "selected" in decision.reason.lower()
+        assert len(evaluated) == 1
 
     asyncio.run(_run())

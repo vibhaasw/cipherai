@@ -55,7 +55,7 @@ async def dispatch_with_breaker(
     tried_so_far: set[str] = set()
 
     for _ in range(max_retries):
-        decision = await select_provider(
+        decision, evaluated_candidates = await select_provider(
             classification=classification,
             redis_client=redis_client,
             exclude_key_ids=tried_so_far,
@@ -64,14 +64,16 @@ async def dispatch_with_breaker(
             logger.info("final_outcome status=no_healthy_provider attempts=%s", len(attempts))
             raise NoHealthyProviderError(
                 message="No healthy provider/key available for this request.",
-                attempts=attempts,
+                attempts=attempts + evaluated_candidates,
             )
 
         attempt_entry: dict[str, Any] = {
             "provider": decision.provider,
             "model": decision.model,
             "key_id": decision.key_id,
+            "credential_ref": decision.credential_ref,
             "rank": decision.rank,
+            "reason": decision.reason,
             "decision_reason": decision.reason,
             "status": "attempting",
         }
@@ -81,7 +83,13 @@ async def dispatch_with_breaker(
         if adapter is None:
             attempt_entry["status"] = "failed"
             attempt_entry["error"] = f"Adapter not configured for provider '{decision.provider}'."
-            await _mark_key_cooling_down(redis_client, decision.provider, decision.key_id, cooldown_seconds=30)
+            await _mark_key_cooling_down(
+                redis_client,
+                decision.provider,
+                decision.credential_ref,
+                decision.key_id,
+                cooldown_seconds=30,
+            )
             logger.info(
                 "dispatch_attempt provider=%s model=%s key_id=%s status=failure latency_s=0 token_count=- reason=adapter_not_configured",
                 decision.provider,
@@ -97,9 +105,16 @@ async def dispatch_with_breaker(
                 prompt,
                 model=decision.model,
                 key_id=decision.key_id,
+                credential_ref=decision.credential_ref,
             )
             latency_seconds = time.perf_counter() - start
-            await write_quota_to_redis(redis_client, decision.provider, decision.key_id, snapshot)
+            await write_quota_to_redis(
+                redis_client,
+                decision.provider,
+                decision.credential_ref,
+                decision.key_id,
+                snapshot,
+            )
             attempt_entry["status"] = "success"
             token_count = _token_count_from_snapshot(snapshot)
             logger.info(
@@ -131,11 +146,18 @@ async def dispatch_with_breaker(
                 await _mark_key_cooling_down(
                     redis_client,
                     decision.provider,
+                    decision.credential_ref,
                     decision.key_id,
                     cooldown_seconds=retry_after or 30,
                 )
             else:
-                await _mark_key_cooling_down(redis_client, decision.provider, decision.key_id, cooldown_seconds=30)
+                await _mark_key_cooling_down(
+                    redis_client,
+                    decision.provider,
+                    decision.credential_ref,
+                    decision.key_id,
+                    cooldown_seconds=30,
+                )
             attempt_entry["status"] = "failed"
             attempt_entry["error"] = f"HTTPStatusError: {status_code}"
             logger.info(
@@ -149,7 +171,13 @@ async def dispatch_with_breaker(
             tried_so_far.add(decision.key_id)
         except Exception as exc:
             latency_seconds = time.perf_counter() - start
-            await _mark_key_cooling_down(redis_client, decision.provider, decision.key_id, cooldown_seconds=30)
+            await _mark_key_cooling_down(
+                redis_client,
+                decision.provider,
+                decision.credential_ref,
+                decision.key_id,
+                cooldown_seconds=30,
+            )
             attempt_entry["status"] = "failed"
             attempt_entry["error"] = f"{type(exc).__name__}: {exc}"
             logger.info(
@@ -169,14 +197,21 @@ async def dispatch_with_breaker(
     )
 
 
-async def _mark_key_cooling_down(redis_client, provider: str, key_id: str, cooldown_seconds: int) -> None:
+async def _mark_key_cooling_down(
+    redis_client,
+    provider: str,
+    credential_ref: str,
+    key_id: str,
+    cooldown_seconds: int,
+) -> None:
     """Mark a key as cooling_down with a manual reset timestamp."""
     now = time.time()
-    redis_key = f"quota:{provider}:{key_id}"
+    redis_key = f"quota:{provider}:{credential_ref}"
     await redis_client.hset(
         redis_key,
         mapping={
             "provider": provider,
+            "credential_ref": credential_ref,
             "key_id": key_id,
             "status": "cooling_down",
             "reset_requests_at": now + cooldown_seconds,

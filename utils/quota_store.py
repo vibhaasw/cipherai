@@ -8,7 +8,13 @@ import time
 from adapters.base import QuotaSnapshot
 
 
-async def write_quota_to_redis(redis_client, provider: str, key_id: str, snap: QuotaSnapshot) -> None:
+async def write_quota_to_redis(
+    redis_client,
+    provider: str,
+    credential_ref: str,
+    key_id: str,
+    snap: QuotaSnapshot,
+) -> None:
     """Persist normalized quota snapshot and publish telemetry update."""
     pct_used = 0.0
     if snap.limit_requests and snap.limit_requests > 0 and snap.remaining_requests is not None:
@@ -20,9 +26,10 @@ async def write_quota_to_redis(redis_client, provider: str, key_id: str, snap: Q
     elif pct_used >= 0.85:
         status = "near_cap"
 
-    rkey = f"quota:{provider}:{key_id}"
+    rkey = f"quota:{provider}:{credential_ref}"
     mapping = {
         "provider": provider,
+        "credential_ref": credential_ref,
         "key_id": key_id,
         "remaining_requests": snap.remaining_requests if snap.remaining_requests is not None else -1,
         "limit_requests": snap.limit_requests if snap.limit_requests is not None else -1,

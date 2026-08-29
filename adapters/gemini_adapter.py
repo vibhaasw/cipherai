@@ -33,8 +33,8 @@ class GeminiAdapter(ProviderAdapter):
         completion_tokens = getattr(usage, "candidates_token_count", None)
         used_tokens = (prompt_tokens or len(prompt) // 4) + (completion_tokens or max(len(completion) // 4, 1))
 
-        key_id = kwargs["key_id"]
-        rkey = f"quota:gemini:{key_id}"
+        credential_ref = kwargs.get("credential_ref", kwargs["key_id"])
+        rkey = f"quota:gemini:{credential_ref}"
 
         used_requests = await self.redis.hincrby(rkey, "used_requests_window", 1)
         used_tokens_total = await self.redis.hincrby(rkey, "used_tokens_window", used_tokens)

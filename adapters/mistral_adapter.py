@@ -40,8 +40,8 @@ class MistralAdapter(ProviderAdapter):
         usage = payload.get("usage", {})
         used_tokens = int(usage.get("total_tokens") or max(len(prompt) // 4, 1))
 
-        key_id = kwargs["key_id"]
-        rkey = f"quota:mistral:{key_id}"
+        credential_ref = kwargs.get("credential_ref", kwargs["key_id"])
+        rkey = f"quota:mistral:{credential_ref}"
         used_requests = await self.redis.hincrby(rkey, "used_requests_window", 1)
         used_tokens_total = await self.redis.hincrby(rkey, "used_tokens_window", used_tokens)
         await self.redis.expire(rkey, 60)

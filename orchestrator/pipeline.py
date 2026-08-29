@@ -90,7 +90,7 @@ def _log_request_sections(prompt: str, classification, result_payload: dict[str,
             attempt.get("provider", "-"),
             attempt.get("model", "-"),
             attempt.get("status", "-"),
-            attempt.get("error", attempt.get("decision_reason", "-")),
+            attempt.get("error", attempt.get("reason", attempt.get("decision_reason", "-"))),
         )
     logger.info(divider)
     if "completion" in result_payload:

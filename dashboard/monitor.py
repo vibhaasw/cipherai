@@ -24,16 +24,16 @@ def _build_table(rows: list[dict[str, Any]]) -> Table:
     """Build a rich table from /status response rows."""
     table = Table(title="CipherAI Local Telemetry", expand=True)
     table.add_column("Provider")
-    table.add_column("Key ID")
+    table.add_column("Credential Ref")
     table.add_column("Status")
     table.add_column("Remaining Requests", justify="right")
     table.add_column("Remaining Tokens", justify="right")
     table.add_column("Reset In (s)", justify="right")
 
     now = time.time()
-    for row in sorted(rows, key=lambda r: (r.get("provider", ""), r.get("key_id", ""))):
+    for row in sorted(rows, key=lambda r: (r.get("provider", ""), r.get("credential_ref", ""))):
         provider = str(row.get("provider", "-"))
-        key_id = str(row.get("key_id", "-"))
+        credential_ref = str(row.get("credential_ref", "-"))
         status = str(row.get("status", "-"))
         remaining_requests = str(row.get("remaining_requests", "-"))
         remaining_tokens = str(row.get("remaining_tokens", "-"))
@@ -50,7 +50,7 @@ def _build_table(rows: list[dict[str, Any]]) -> Table:
         color = STATUS_COLOR.get(status, "white")
         table.add_row(
             provider,
-            key_id,
+            credential_ref,
             f"[{color}]{status}[/{color}]",
             remaining_requests,
             remaining_tokens,
@@ -86,16 +86,18 @@ async def run_monitor() -> None:
                         "Note: a provider/key only appears here after its first request — ranks that haven't been tried yet (due to higher-ranked candidates succeeding first) won't show until exercised.",
                         style="dim",
                     )
+                    shared_note = Text("Multiple models using the same credential share one quota row.", style="dim")
                     footer = Text(f"Last Updated: {last_updated}", style="bold cyan")
-                    live.update(Group(table, note, footer))
+                    live.update(Group(table, note, shared_note, footer))
                 except httpx.HTTPError:
                     waiting = Text("Waiting for CipherAI API at http://localhost:8000 ...", style="bold yellow")
                     note = Text(
                         "Note: a provider/key only appears here after its first request — ranks that haven't been tried yet (due to higher-ranked candidates succeeding first) won't show until exercised.",
                         style="dim",
                     )
+                    shared_note = Text("Multiple models using the same credential share one quota row.", style="dim")
                     footer = Text(f"Last Updated: {last_updated}", style="bold cyan")
-                    live.update(Group(waiting, note, footer))
+                    live.update(Group(waiting, note, shared_note, footer))
                 await asyncio.sleep(1.5)
 
 
