@@ -82,12 +82,20 @@ async def run_monitor() -> None:
                 try:
                     rows = await _fetch_status(client)
                     table = _build_table(rows)
+                    note = Text(
+                        "Note: a provider/key only appears here after its first request — ranks that haven't been tried yet (due to higher-ranked candidates succeeding first) won't show until exercised.",
+                        style="dim",
+                    )
                     footer = Text(f"Last Updated: {last_updated}", style="bold cyan")
-                    live.update(Group(table, footer))
+                    live.update(Group(table, note, footer))
                 except httpx.HTTPError:
                     waiting = Text("Waiting for CipherAI API at http://localhost:8000 ...", style="bold yellow")
+                    note = Text(
+                        "Note: a provider/key only appears here after its first request — ranks that haven't been tried yet (due to higher-ranked candidates succeeding first) won't show until exercised.",
+                        style="dim",
+                    )
                     footer = Text(f"Last Updated: {last_updated}", style="bold cyan")
-                    live.update(Group(waiting, footer))
+                    live.update(Group(waiting, note, footer))
                 await asyncio.sleep(1.5)
 
 

@@ -28,21 +28,12 @@ async def handle_prompt(prompt: str, redis_client, adapters: dict) -> dict[str, 
 
     Returns normalized success/error JSON payload and never leaks raw exceptions.
     """
+    classification = None
+    result_payload: dict[str, Any]
     try:
-        logger.info("prompt_received text=%s", prompt[:60].replace("\n", " "))
         classification = await classify_prompt(prompt)
-        logger.info(
-            "classification_result domain=%s complexity=%s",
-            classification.domain,
-            classification.complexity,
-        )
         result = await dispatch_with_breaker(classification, prompt, redis_client, adapters)
-        logger.info(
-            "final_outcome status=success provider=%s model=%s",
-            result["provider"],
-            result["model"],
-        )
-        return {
+        result_payload = {
             "completion": result["completion"],
             "domain": classification.domain,
             "complexity": classification.complexity,
@@ -51,26 +42,71 @@ async def handle_prompt(prompt: str, redis_client, adapters: dict) -> dict[str, 
             "attempts": result["attempts"],
         }
     except NoHealthyProviderError as exc:
-        logger.info("final_outcome status=no_healthy_provider message=%s", str(exc))
-        return {
+        result_payload = {
             "error": "NO_HEALTHY_PROVIDER",
             "message": str(exc),
             "attempts": exc.attempts,
         }
     except AllProvidersExhaustedError as exc:
-        logger.info("final_outcome status=all_providers_exhausted message=%s", str(exc))
-        return {
+        result_payload = {
             "error": "ALL_PROVIDERS_EXHAUSTED",
             "message": str(exc),
             "attempts": exc.attempts,
         }
     except Exception as exc:
-        logger.info("final_outcome status=pipeline_error error_type=%s", type(exc).__name__)
-        return {
+        result_payload = {
             "error": "PIPELINE_ERROR",
             "message": f"{type(exc).__name__}: {exc}",
             "attempts": [],
         }
+    _log_request_sections(prompt, classification, result_payload)
+    return result_payload
+
+
+def _log_request_sections(prompt: str, classification, result_payload: dict[str, Any]) -> None:
+    """Log readable request sections for local developer observability."""
+    divider = "─" * 40
+    logger.info(divider)
+    logger.info("PROMPT: %s", prompt.replace("\n", "\\n"))
+    logger.info(divider)
+    if classification is not None:
+        logger.info(
+            "CLASSIFICATION: domain=%s complexity=%s complexity_score=%s",
+            classification.domain,
+            classification.complexity,
+            classification.complexity_score,
+        )
+    else:
+        logger.info("CLASSIFICATION: unavailable")
+    logger.info(divider)
+    logger.info("ROUTING ATTEMPTS:")
+    attempts = result_payload.get("attempts", [])
+    if not attempts:
+        logger.info("attempt: none")
+    for attempt in attempts:
+        logger.info(
+            "attempt: rank=%s provider=%s model=%s status=%s reason=%s",
+            attempt.get("rank", "-"),
+            attempt.get("provider", "-"),
+            attempt.get("model", "-"),
+            attempt.get("status", "-"),
+            attempt.get("error", attempt.get("decision_reason", "-")),
+        )
+    logger.info(divider)
+    if "completion" in result_payload:
+        logger.info(
+            "RESULT: provider=%s model=%s completion_length_chars=%s",
+            result_payload.get("provider", "-"),
+            result_payload.get("model", "-"),
+            len(str(result_payload.get("completion", ""))),
+        )
+    else:
+        logger.info(
+            "RESULT: error=%s message=%s completion_length_chars=0",
+            result_payload.get("error", "-"),
+            result_payload.get("message", "-"),
+        )
+    logger.info(divider)
 
 
 def _build_adapters(redis_client) -> dict[str, Any]:

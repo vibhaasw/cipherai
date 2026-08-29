@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
 import os
 import re
 
@@ -14,6 +15,8 @@ OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "10"))
 
 ALLOWED_DOMAINS = {"CODE_GEN", "CREATIVE_TEXT", "MATH_LOGIC", "DOC_SUMMARIZATION", "GENERAL"}
 ALLOWED_COMPLEXITIES = {"LOW", "MEDIUM", "HIGH"}
+
+logger = logging.getLogger("cipherai.classifier.slm_classifier")
 
 
 @dataclass
@@ -43,6 +46,7 @@ async def classify_prompt(prompt: str, model: str = "phi4-mini:latest") -> Class
         "No markdown, no code fences, no extra text."
     )
 
+    fallback_reason = "unknown error"
     try:
         async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT_SECONDS) as client:
             response = await client.post(
@@ -66,13 +70,33 @@ async def classify_prompt(prompt: str, model: str = "phi4-mini:latest") -> Class
                     parsed.est_input_tokens = max(len(prompt) // 4, 1)
                 if parsed.est_output_tokens <= 1:
                     parsed.est_output_tokens = _default_output_tokens(parsed.complexity)
+                logger.info(
+                    "[CipherAI][Classifier] Used LOCAL Ollama model (%s) — domain=%s complexity=%s",
+                    model,
+                    parsed.domain,
+                    parsed.complexity,
+                )
                 return parsed
-    except (httpx.HTTPError, TimeoutError, ValueError, json.JSONDecodeError):
-        pass
+            fallback_reason = "JSON parse failure"
+    except httpx.TimeoutException:
+        fallback_reason = "timeout"
+    except (httpx.ConnectError, httpx.NetworkError):
+        fallback_reason = "connection error"
+    except (ValueError, json.JSONDecodeError):
+        fallback_reason = "JSON parse failure"
+    except httpx.HTTPError:
+        fallback_reason = "connection error"
     except Exception:
-        pass
+        fallback_reason = "JSON parse failure"
 
-    return _heuristic_classification(prompt)
+    fallback = _heuristic_classification(prompt)
+    logger.info(
+        "[CipherAI][Classifier] FALLBACK heuristic used — reason: %s — domain=%s complexity=%s",
+        fallback_reason,
+        fallback.domain,
+        fallback.complexity,
+    )
+    return fallback
 
 
 def _safe_parse_classification_json(raw_text: str) -> ClassificationResult | None:
