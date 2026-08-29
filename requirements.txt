@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+httpx
+redis
+google-generativeai
+pydantic
+pytest
