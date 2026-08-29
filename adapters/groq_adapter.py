@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 
 import httpx
@@ -61,7 +62,28 @@ class GroqAdapter(ProviderAdapter):
 
 
 def _parse_reset_seconds(value: str | None) -> float:
-    """Convert reset header values such as '3s' to float seconds."""
+    """Convert reset header values such as '3s' or '1m26.4' to seconds."""
     if not value:
         return 0.0
-    return float(value.rstrip("s"))
+    raw = value.strip().lower()
+
+    # Fast path for plain number strings (assume seconds).
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+
+    # Support composite units like "1m26.4s" or "1m26.4".
+    total = 0.0
+    for amount, unit in re.findall(r"(\d+(?:\.\d+)?)(ms|s|m|h)?", raw):
+        number = float(amount)
+        if unit == "h":
+            total += number * 3600
+        elif unit == "m":
+            total += number * 60
+        elif unit == "ms":
+            total += number / 1000
+        else:
+            total += number
+
+    return total
