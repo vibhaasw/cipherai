@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import sys
 from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -37,6 +39,7 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def on_startup() -> None:
+        _configure_cipherai_logging()
         redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
         app.state.redis = redis_async.from_url(redis_url, decode_responses=True)
         app.state.adapters = _build_adapters(app.state.redis)
@@ -100,6 +103,22 @@ def _build_adapters(redis_client) -> dict[str, Any]:
     if mistral_key:
         adapters["mistral"] = MistralAdapter(api_key=mistral_key, redis_client=redis_client)
     return adapters
+
+
+def _configure_cipherai_logging() -> None:
+    """Configure structured CipherAI logs to stdout with timestamp."""
+    base_logger = logging.getLogger("cipherai")
+    if getattr(base_logger, "_cipherai_configured", False):
+        return
+
+    handler = logging.StreamHandler(sys.stdout)
+    formatter = logging.Formatter("[CipherAI] %(asctime)s %(levelname)s %(name)s %(message)s")
+    handler.setFormatter(formatter)
+
+    base_logger.setLevel(logging.INFO)
+    base_logger.addHandler(handler)
+    base_logger.propagate = False
+    setattr(base_logger, "_cipherai_configured", True)
 
 
 async def _read_all_quota_status(redis_client) -> list[dict[str, Any]]:

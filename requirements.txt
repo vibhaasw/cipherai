@@ -5,3 +5,4 @@ redis
 google-generativeai
 pydantic
 pytest
+rich

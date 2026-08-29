@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from typing import Any
 
@@ -18,6 +19,8 @@ from router.circuit_breaker import (
     dispatch_with_breaker,
 )
 
+logger = logging.getLogger("cipherai.orchestrator.pipeline")
+
 
 async def handle_prompt(prompt: str, redis_client, adapters: dict) -> dict[str, Any]:
     """
@@ -26,8 +29,19 @@ async def handle_prompt(prompt: str, redis_client, adapters: dict) -> dict[str, 
     Returns normalized success/error JSON payload and never leaks raw exceptions.
     """
     try:
+        logger.info("prompt_received text=%s", prompt[:60].replace("\n", " "))
         classification = await classify_prompt(prompt)
+        logger.info(
+            "classification_result domain=%s complexity=%s",
+            classification.domain,
+            classification.complexity,
+        )
         result = await dispatch_with_breaker(classification, prompt, redis_client, adapters)
+        logger.info(
+            "final_outcome status=success provider=%s model=%s",
+            result["provider"],
+            result["model"],
+        )
         return {
             "completion": result["completion"],
             "domain": classification.domain,
@@ -37,18 +51,21 @@ async def handle_prompt(prompt: str, redis_client, adapters: dict) -> dict[str, 
             "attempts": result["attempts"],
         }
     except NoHealthyProviderError as exc:
+        logger.info("final_outcome status=no_healthy_provider message=%s", str(exc))
         return {
             "error": "NO_HEALTHY_PROVIDER",
             "message": str(exc),
             "attempts": exc.attempts,
         }
     except AllProvidersExhaustedError as exc:
+        logger.info("final_outcome status=all_providers_exhausted message=%s", str(exc))
         return {
             "error": "ALL_PROVIDERS_EXHAUSTED",
             "message": str(exc),
             "attempts": exc.attempts,
         }
     except Exception as exc:
+        logger.info("final_outcome status=pipeline_error error_type=%s", type(exc).__name__)
         return {
             "error": "PIPELINE_ERROR",
             "message": f"{type(exc).__name__}: {exc}",

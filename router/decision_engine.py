@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import time
 
 from classifier.slm_classifier import ClassificationResult
 from config.benchmark_matrix import BENCHMARK_MATRIX
+
+logger = logging.getLogger("cipherai.router.decision_engine")
 
 
 @dataclass
@@ -42,6 +45,13 @@ async def select_provider(
         rank = int(candidate["rank"])
 
         if key_id in excluded:
+            logger.info(
+                "candidate_evaluated provider=%s model=%s key_id=%s rank=%s healthy=false reason=key_already_tried",
+                provider,
+                model,
+                key_id,
+                rank,
+            )
             skipped.append(f"Rank #{rank} ({model}) skipped: key already tried.")
             continue
 
@@ -49,6 +59,13 @@ async def select_provider(
         quota_hash = await redis_client.hgetall(redis_key)
 
         if not quota_hash:
+            logger.info(
+                "candidate_evaluated provider=%s model=%s key_id=%s rank=%s healthy=true reason=no_quota_data_selected",
+                provider,
+                model,
+                key_id,
+                rank,
+            )
             reason = _build_reason(skipped, rank, model, "healthy (no prior quota data) — selected.")
             return RoutingDecision(provider=provider, model=model, key_id=key_id, rank=rank, reason=reason)
 
@@ -59,10 +76,27 @@ async def select_provider(
 
         if status != "healthy":
             usage_hint = _usage_hint(quota_hash)
+            logger.info(
+                "candidate_evaluated provider=%s model=%s key_id=%s rank=%s healthy=false reason=status_%s%s",
+                provider,
+                model,
+                key_id,
+                rank,
+                status,
+                usage_hint.replace(" ", "_"),
+            )
             skipped.append(f"Rank #{rank} ({model}) skipped: status={status}{usage_hint}.")
             continue
 
         usage_hint = _usage_hint(quota_hash)
+        logger.info(
+            "candidate_evaluated provider=%s model=%s key_id=%s rank=%s healthy=true reason=selected%s",
+            provider,
+            model,
+            key_id,
+            rank,
+            usage_hint.replace(" ", "_"),
+        )
         reason = _build_reason(skipped, rank, model, f"healthy{usage_hint} — selected.")
         return RoutingDecision(provider=provider, model=model, key_id=key_id, rank=rank, reason=reason)
 

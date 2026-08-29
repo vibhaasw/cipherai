@@ -88,3 +88,19 @@ curl -X POST http://localhost:8000/route \
 ```bash
 pytest -q
 ```
+
+## Local Dashboard
+
+Run the API in one terminal:
+
+```bash
+./scripts/run_local.sh
+```
+
+Run the live terminal monitor in a second terminal:
+
+```bash
+python dashboard/monitor.py
+```
+
+This gives a live view of provider/key health while you test routing with `curl`.
