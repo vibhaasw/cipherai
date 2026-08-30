@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CIPHERAI — Live Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&family=Inter:wght@300..600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="grid-bg"></div>
+
+  <nav>
+    <div class="nav-logo">
+      <span>CIPHER<span class="accent">AI</span></span>
+    </div>
+    <div class="nav-actions">
+      <span id="backend-indicator" class="health-tag cooling_down">WAITING FOR BACKEND</span>
+      <a href="/report.html" class="nav-link">View Comparison Report</a>
+    </div>
+  </nav>
+
+  <main class="wrap">
+    <div class="layout">
+
+      <!-- Section 1: Chat/Console -->
+      <section class="col">
+        <div class="section-head">
+          <div class="eyebrow">Live Router</div>
+          <h2>Give it a prompt.<br>Watch it choose.</h2>
+        </div>
+
+        <div class="panel console-box">
+          <textarea id="prompt-input" placeholder="Ask CipherAI something..." rows="4"></textarea>
+          <div class="console-foot">
+            <span class="token-count" id="char-count">0 CHARS &middot; ENTER TO ROUTE</span>
+            <button class="btn" id="send-btn" type="button">Route Request</button>
+          </div>
+        </div>
+
+        <div id="chat-history" class="chat-history">
+          <div class="panel">
+            <div class="result-empty">&mdash; NO REQUEST ROUTED YET &mdash;</div>
+          </div>
+        </div>
+
+        <div class="section-head sub">
+          <div class="eyebrow">Session Decision Log</div>
+        </div>
+        <div class="panel">
+          <div id="decision-log" class="decision-log">
+            <div class="result-empty">&mdash; NO DECISIONS LOGGED YET &mdash;</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 2: Live System Dashboard -->
+      <section class="col">
+        <div class="section-head">
+          <div class="eyebrow">Provider State</div>
+          <h2>Watched in<br>real time.</h2>
+        </div>
+
+        <div id="status-container" class="providers-grid">
+          <div class="panel"><div class="result-empty">WAITING FOR CIPHER AI BACKEND...</div></div>
+        </div>
+
+        <div class="section-head sub">
+          <div class="eyebrow">Continuations</div>
+        </div>
+
+        <div class="panel">
+          <div id="continuations-container" class="table-container">
+            <div class="result-empty">WAITING FOR CIPHER AI BACKEND...</div>
+          </div>
+        </div>
+
+        <div id="summary-metrics" class="metrics-grid"></div>
+        <p id="last-updated" class="last-updated"></p>
+      </section>
+
+    </div>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

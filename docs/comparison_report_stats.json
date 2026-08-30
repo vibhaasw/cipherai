@@ -1,0 +1,10 @@
+{
+  "total_events": 0,
+  "domain_counts": {},
+  "overall_avg_est_tokens_sent": null,
+  "overall_avg_est_tokens_if_uncompressed": null,
+  "overall_avg_tokens_saved_pct_compressed_only": null,
+  "ollama_fallback_triggers": 0,
+  "compressed_continuation_count": 0,
+  "domain_rows": []
+}

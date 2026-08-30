@@ -8,8 +8,12 @@ import os
 import sys
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from redis import asyncio as redis_async
 
@@ -67,6 +71,14 @@ def create_app() -> FastAPI:
         """Return recent continuation events and running summary stats."""
         return await _read_continuation_events(app.state.redis)
 
+    @app.get("/docs/context-strategy-comparison", response_class=PlainTextResponse)
+    async def get_context_strategy_comparison() -> str:
+        """Return the context-strategy comparison markdown for frontend display."""
+        doc_path = Path(__file__).resolve().parent.parent / "docs" / "context_strategy_comparison.md"
+        if not doc_path.is_file():
+            raise HTTPException(status_code=404, detail="Comparison report not found")
+        return doc_path.read_text(encoding="utf-8")
+
     @app.websocket("/ws/telemetry")
     async def telemetry_socket(websocket: WebSocket) -> None:
         """Stream status snapshots and Redis telemetry updates to clients."""
@@ -90,6 +102,11 @@ def create_app() -> FastAPI:
         finally:
             await pubsub.unsubscribe("telemetry_updates")
             await pubsub.aclose()
+
+    # Mounted last so API routes above always take precedence over static files.
+    frontend_dir = Path(__file__).resolve().parent.parent / "frontend"
+    if frontend_dir.is_dir():
+        app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
 
     return app
 
