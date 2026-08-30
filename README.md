@@ -9,6 +9,18 @@ CipherAI is an async LLM orchestration backend that routes prompts to the best a
 - Live telemetry over REST + WebSocket
 - Developer observability via structured logs and a terminal dashboard
 
+## Why This Matters: Beyond What Existing Tools Do
+
+Even widely-used AI developer tools like Cursor handle provider rate limits reactively, not automatically. When Cursor hits a rate limit mid-session, it stops the request and surfaces an error to the user directly: "We've hit a rate limit with the provider. Please switch to the 'auto' model, another model, or try again in a few moments." The user must manually intervene - pick a different model, retry, or wait.
+
+CIPHER AI goes a step further: when a provider's account hits its actual rate limit mid-generation (not just before a request starts), CIPHER AI automatically:
+1. Detects the mid-stream failure
+2. Selects a healthy alternative provider via the same benchmark-ranked decision engine used for initial routing
+3. Compresses the already-generated context locally (via an offline Ollama model, at zero additional API cost) for non-code domains, while preserving code generations verbatim to protect syntactic correctness
+4. Seamlessly continues the response on the new provider - with no user intervention, and no visible interruption in the final output
+
+This distinction matters industry-wide: a recent survey of major LLM API providers (Google, OpenRouter, xAI, Alibaba/Qwen) found that automatic model downgrade or fallback at quota exhaustion is largely undocumented - most vendors either error out directly or, at best, provide sample code for developers to build their own manual retry logic. CIPHER AI's mid-generation continuation handler is a genuine, working implementation of the kind of resilience most infrastructure providers only leave as an exercise for the developer.
+
 ## Current Architecture
 
 - `classifier/slm_classifier.py`

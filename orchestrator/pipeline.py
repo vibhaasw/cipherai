@@ -24,21 +24,21 @@ logger = logging.getLogger("cipherai.orchestrator.pipeline")
 
 
 async def handle_prompt(prompt: str, redis_client, adapters: dict) -> dict[str, Any]:
-    """
-    End-to-end prompt pipeline wrapper.
-
-    Returns normalized success/error JSON payload and never leaks raw exceptions.
-    """
+    """Run classification + dispatch pipeline and return normalized response JSON."""
     classification = None
     result_payload: dict[str, Any]
     try:
         classification = await classify_prompt(prompt)
         result = await dispatch_with_breaker(classification, prompt, redis_client, adapters)
         attempts = list(result["attempts"])
-        completion = result["completion"]
+        completion = str(result["completion"])
 
         if _needs_continuation(result):
-            tried_key_ids = {str(attempt.get("key_id")) for attempt in attempts if attempt.get("key_id")}
+            last_key = next(
+                (str(attempt.get("key_id")) for attempt in reversed(attempts) if attempt.get("key_id")),
+                None,
+            )
+            tried_key_ids = {last_key} if last_key else set()
             continuation = await handle_continuation(
                 original_prompt=prompt,
                 partial_output=str(result.get("partial_output") or completion),
@@ -80,17 +80,41 @@ async def handle_prompt(prompt: str, redis_client, adapters: dict) -> dict[str, 
     return result_payload
 
 
+def _needs_continuation(result: dict[str, Any]) -> bool:
+    """
+    Trigger continuation only for quota/rate-limit mid-stream interruptions.
+
+    A continuation is valid only when partial output exists AND failure signal
+    indicates rate-limit/quota exhaustion after generation already started.
+    """
+    partial_output = str(result.get("partial_output") or "")
+    if not partial_output:
+        return False
+    if not bool(result.get("midstream_failure")):
+        return False
+
+    if result.get("midstream_status_code") == 429 or result.get("status_code") == 429:
+        return True
+    if bool(result.get("midstream_rate_limited")):
+        return True
+
+    signal_text = " ".join(
+        str(result.get(key, "")).lower()
+        for key in (
+            "midstream_error_type",
+            "midstream_error",
+            "midstream_failure_reason",
+            "provider_error",
+        )
+    )
+    rate_limit_markers = ("429", "resourceexhausted", "rate limit", "quota", "too many requests")
+    return any(marker in signal_text for marker in rate_limit_markers)
+
+
 def _log_request_sections(prompt: str, classification, result_payload: dict[str, Any]) -> None:
     """Log readable request sections for local developer observability."""
     divider = "─" * 40
     logger.info(divider)
-
-
-def _needs_continuation(result: dict[str, Any]) -> bool:
-    """Detect cut-off or partial-output handoff conditions requiring continuation."""
-    finish_reason = str(result.get("finish_reason") or "").lower()
-    has_partial_failure = bool(result.get("midstream_failure") and result.get("partial_output"))
-    return finish_reason == "length" or has_partial_failure
     logger.info("PROMPT: %s", prompt.replace("\n", "\\n"))
     logger.info(divider)
     if classification is not None:

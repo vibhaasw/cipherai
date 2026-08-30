@@ -73,6 +73,78 @@ async def _fetch_status(client: httpx.AsyncClient) -> list[dict[str, Any]]:
     return []
 
 
+def _build_continuation_table(events: list[dict[str, Any]]) -> Table:
+    """Build a continuation-events table from /continuations data."""
+    table = Table(title="Recent Continuations", expand=True)
+    table.add_column("Time")
+    table.add_column("Domain")
+    table.add_column("From → To")
+    table.add_column("Compression")
+    table.add_column("Tokens Saved %", justify="right")
+    table.add_column("Status")
+
+    for event in events:
+        ts = int(event.get("timestamp", 0) or 0)
+        when = datetime.fromtimestamp(ts).strftime("%H:%M:%S") if ts > 0 else "-"
+        domain = str(event.get("domain", "-"))
+        from_to = f"{event.get('original_provider', '-')}" + " → " + f"{event.get('fallback_provider', '-')}"
+        compression = str(event.get("compression_used", "N/A"))
+        if compression.lower() == "yes":
+            compression_display = "✓"
+        elif compression.lower() == "no":
+            compression_display = "✗"
+        else:
+            compression_display = "N/A"
+
+        if domain == "CODE_GEN":
+            saved_display = "[dim]N/A[/dim]"
+        else:
+            pct = float(event.get("tokens_saved_pct", 0.0))
+            if pct > 30:
+                saved_display = f"[green]{pct:.1f}%[/green]"
+            elif pct >= 0:
+                saved_display = f"[yellow]{pct:.1f}%[/yellow]"
+            else:
+                saved_display = "[dim]N/A[/dim]"
+
+        status = str(event.get("final_status", "-"))
+        status_display = f"[green]{status}[/green]" if status == "success" else f"[red]{status}[/red]"
+        table.add_row(when, domain, from_to, compression_display, saved_display, status_display)
+
+    return table
+
+
+def _build_summary_line(summary: dict[str, Any]) -> Text:
+    """Build running continuation summary line from aggregate stats."""
+    total_count = int(summary.get("total_count", 0))
+    avg_saved = float(summary.get("avg_tokens_saved_pct", 0.0))
+    compressed_count = int(summary.get("compressed_count", 0))
+    eligible_count = int(summary.get("eligible_count", 0))
+    fallback_count = int(summary.get("fallback_count", 0))
+    return Text(
+        (
+            f"Continuations: {total_count} total | "
+            f"Avg tokens saved (compressed domains only): {avg_saved:.1f}% | "
+            f"Compression used: {compressed_count}/{eligible_count} eligible calls | "
+            f"Ollama fallback triggered: {fallback_count} times"
+        ),
+        style="bold magenta",
+    )
+
+
+async def _fetch_continuations(client: httpx.AsyncClient) -> dict[str, Any]:
+    """Fetch continuation events and summary from local API."""
+    response = await client.get("http://localhost:8000/continuations")
+    response.raise_for_status()
+    data = response.json()
+    if isinstance(data, dict):
+        events = data.get("events")
+        summary = data.get("summary")
+        if isinstance(events, list) and isinstance(summary, dict):
+            return {"events": events, "summary": summary}
+    return {"events": [], "summary": {}}
+
+
 async def run_monitor() -> None:
     """Run live updating dashboard that polls the API every 1.5 seconds."""
     async with httpx.AsyncClient(timeout=5.0) as client:
@@ -81,14 +153,21 @@ async def run_monitor() -> None:
                 last_updated = datetime.now().strftime("%H:%M:%S")
                 try:
                     rows = await _fetch_status(client)
+                    continuation_payload = await _fetch_continuations(client)
                     table = _build_table(rows)
+                    events = continuation_payload["events"]
+                    summary_line = _build_summary_line(continuation_payload["summary"])
+                    if events:
+                        continuation_table = _build_continuation_table(events)
+                    else:
+                        continuation_table = Text("No continuations recorded yet", style="bold yellow")
                     note = Text(
                         "Note: a provider/key only appears here after its first request — ranks that haven't been tried yet (due to higher-ranked candidates succeeding first) won't show until exercised.",
                         style="dim",
                     )
                     shared_note = Text("Multiple models using the same credential share one quota row.", style="dim")
                     footer = Text(f"Last Updated: {last_updated}", style="bold cyan")
-                    live.update(Group(table, note, shared_note, footer))
+                    live.update(Group(table, note, shared_note, continuation_table, summary_line, footer))
                 except httpx.HTTPError:
                     waiting = Text("Waiting for CipherAI API at http://localhost:8000 ...", style="bold yellow")
                     note = Text(
@@ -96,8 +175,13 @@ async def run_monitor() -> None:
                         style="dim",
                     )
                     shared_note = Text("Multiple models using the same credential share one quota row.", style="dim")
+                    empty_continuations = Text("No continuations recorded yet", style="bold yellow")
+                    summary_line = Text(
+                        "Continuations: 0 total | Avg tokens saved (compressed domains only): 0.0% | Compression used: 0/0 eligible calls | Ollama fallback triggered: 0 times",
+                        style="bold magenta",
+                    )
                     footer = Text(f"Last Updated: {last_updated}", style="bold cyan")
-                    live.update(Group(waiting, note, shared_note, footer))
+                    live.update(Group(waiting, note, shared_note, empty_continuations, summary_line, footer))
                 await asyncio.sleep(1.5)
 
 

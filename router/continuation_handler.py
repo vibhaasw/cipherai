@@ -44,6 +44,12 @@ async def handle_continuation(
     """Continue a cut-off generation by switching providers and preserving style."""
     final_output = partial_output
     attempts: list[dict[str, Any]] = []
+    initial_tried = set(tried_key_ids)
+    total_est_tokens_sent = 0
+    total_est_tokens_uncompressed = 0
+    compressed_count = 0
+    eligible_count = 0
+    fallback_count = 0
 
     for _ in range(max_continuation_retries):
         decision, evaluated = await select_provider(
@@ -53,13 +59,33 @@ async def handle_continuation(
         )
         if decision is None:
             attempts.extend(evaluated)
+            event = _build_continuation_event(
+                domain=domain,
+                initial_tried=initial_tried,
+                attempts=attempts,
+                total_est_tokens_sent=total_est_tokens_sent,
+                total_est_tokens_uncompressed=total_est_tokens_uncompressed,
+                compressed_count=compressed_count,
+                eligible_count=eligible_count,
+                fallback_count=fallback_count,
+                final_status="exhausted",
+            )
+            await _persist_continuation_event(redis_client, event)
             return {"final_output": final_output, "attempts": attempts}
 
-        continuation_context, compression_mode = await _build_continuation_context(
+        continuation_context, compression_mode, compression_meta = await _build_continuation_context(
             original_prompt=original_prompt,
             partial_output=final_output,
             domain=domain,
         )
+        total_est_tokens_sent += int(compression_meta["est_tokens_sent"])
+        total_est_tokens_uncompressed += int(compression_meta["est_tokens_if_uncompressed"])
+        if bool(compression_meta["eligible_for_compression"]):
+            eligible_count += 1
+        if compression_mode == "ollama_summary_plus_tail":
+            compressed_count += 1
+        if compression_mode == "fallback_tail_800":
+            fallback_count += 1
         prompt = (
             STYLE_MATCH_INSTRUCTION.format(domain=domain)
             + "\n\n"
@@ -118,10 +144,18 @@ async def handle_continuation(
                 decision.key_id,
                 finish_reason or "unknown",
             )
-            if finish_reason == "length":
-                tried_key_ids.add(decision.key_id)
-                attempt["status"] = "partial_length"
-                continue
+            event = _build_continuation_event(
+                domain=domain,
+                initial_tried=initial_tried,
+                attempts=attempts,
+                total_est_tokens_sent=total_est_tokens_sent,
+                total_est_tokens_uncompressed=total_est_tokens_uncompressed,
+                compressed_count=compressed_count,
+                eligible_count=eligible_count,
+                fallback_count=fallback_count,
+                final_status="success",
+            )
+            await _persist_continuation_event(redis_client, event)
             return {"final_output": final_output, "attempts": attempts}
         except Exception as exc:
             latency_seconds = time.perf_counter() - start
@@ -143,10 +177,26 @@ async def handle_continuation(
                 type(exc).__name__,
             )
 
+    event = _build_continuation_event(
+        domain=domain,
+        initial_tried=initial_tried,
+        attempts=attempts,
+        total_est_tokens_sent=total_est_tokens_sent,
+        total_est_tokens_uncompressed=total_est_tokens_uncompressed,
+        compressed_count=compressed_count,
+        eligible_count=eligible_count,
+        fallback_count=fallback_count,
+        final_status="exhausted",
+    )
+    await _persist_continuation_event(redis_client, event)
     return {"final_output": final_output, "attempts": attempts}
 
 
-async def _build_continuation_context(original_prompt: str, partial_output: str, domain: str) -> tuple[str, str]:
+async def _build_continuation_context(
+    original_prompt: str,
+    partial_output: str,
+    domain: str,
+) -> tuple[str, str, dict[str, Any]]:
     """Build continuation context using domain-aware compression policy."""
     if domain == "CODE_GEN":
         restatement = original_prompt[:150]
@@ -155,17 +205,32 @@ async def _build_continuation_context(original_prompt: str, partial_output: str,
             "[Continue directly from this exact point:]\n"
             f"{partial_output}"
         )
-        return context, "code_verbatim"
+        est = max(len(context) // 4, 1)
+        return context, "code_verbatim", {
+            "est_tokens_sent": est,
+            "est_tokens_if_uncompressed": est,
+            "eligible_for_compression": False,
+        }
 
     if len(partial_output) < 500:
         context = (
             "[Continue directly from this exact point:]\n"
             f"{partial_output}"
         )
-        return context, "short_verbatim"
+        est = max(len(context) // 4, 1)
+        return context, "short_verbatim", {
+            "est_tokens_sent": est,
+            "est_tokens_if_uncompressed": est,
+            "eligible_for_compression": False,
+        }
 
     head = partial_output[:-400]
     tail = partial_output[-400:]
+    uncompressed_context = (
+        "[Continue directly from this exact point:]\n"
+        f"{partial_output}"
+    )
+    uncompressed_est = max(len(uncompressed_context) // 4, 1)
     summary = await _compress_head_with_ollama(head)
     if summary is None:
         fallback_tail = partial_output[-800:]
@@ -173,14 +238,22 @@ async def _build_continuation_context(original_prompt: str, partial_output: str,
             "[Continue directly from this exact point:]\n"
             f"{fallback_tail}"
         )
-        return context, "fallback_tail_800"
+        return context, "fallback_tail_800", {
+            "est_tokens_sent": max(len(context) // 4, 1),
+            "est_tokens_if_uncompressed": uncompressed_est,
+            "eligible_for_compression": True,
+        }
 
     context = (
         f"Summary of text so far: {summary}\n\n"
         "[Continue directly from this exact point:]\n"
         f"{tail}"
     )
-    return context, "ollama_summary_plus_tail"
+    return context, "ollama_summary_plus_tail", {
+        "est_tokens_sent": max(len(context) // 4, 1),
+        "est_tokens_if_uncompressed": uncompressed_est,
+        "eligible_for_compression": True,
+    }
 
 
 async def _compress_head_with_ollama(head_text: str) -> str | None:
@@ -230,6 +303,69 @@ class _SimpleClassification:
 
     def __init__(self, domain: str) -> None:
         self.domain = domain
+
+
+def _build_continuation_event(
+    domain: str,
+    initial_tried: set[str],
+    attempts: list[dict[str, Any]],
+    total_est_tokens_sent: int,
+    total_est_tokens_uncompressed: int,
+    compressed_count: int,
+    eligible_count: int,
+    fallback_count: int,
+    final_status: str,
+) -> dict[str, Any]:
+    """Build compact continuation event record for Redis list storage."""
+    successful = next((a for a in reversed(attempts) if a.get("status") == "success"), None)
+    fallback_provider = successful.get("provider") if successful else (attempts[-1].get("provider") if attempts else None)
+    compression_used = (
+        "N/A"
+        if domain == "CODE_GEN"
+        else ("yes" if compressed_count > 0 else "no")
+    )
+    tokens_saved_pct = 0.0
+    if total_est_tokens_uncompressed > 0:
+        tokens_saved_pct = max(
+            (1 - (total_est_tokens_sent / total_est_tokens_uncompressed)) * 100,
+            0.0,
+        )
+    return {
+        "timestamp": int(time.time()),
+        "domain": domain,
+        "original_provider": _infer_provider_from_tried(initial_tried),
+        "fallback_provider": fallback_provider,
+        "compression_used": compression_used,
+        "est_tokens_sent": total_est_tokens_sent,
+        "est_tokens_if_uncompressed": total_est_tokens_uncompressed,
+        "tokens_saved_pct": round(tokens_saved_pct, 2),
+        "retry_count": max(len(attempts) - 1, 0),
+        "final_status": final_status,
+        "eligible_for_compression": eligible_count > 0,
+        "compressed_count": compressed_count,
+        "eligible_count": eligible_count,
+        "fallback_count": fallback_count,
+    }
+
+
+def _infer_provider_from_tried(tried_key_ids: set[str]) -> str:
+    """Best-effort provider inference from key_id naming convention."""
+    for key_id in tried_key_ids:
+        lower = key_id.lower()
+        if lower.startswith("groq_"):
+            return "groq"
+        if lower.startswith("gemini_"):
+            return "gemini"
+        if lower.startswith("mistral_"):
+            return "mistral"
+    return "unknown"
+
+
+async def _persist_continuation_event(redis_client, event: dict[str, Any]) -> None:
+    """Append continuation event to capped Redis list for dashboard usage."""
+    payload = json.dumps(event)
+    await redis_client.lpush("continuation_events", payload)
+    await redis_client.ltrim("continuation_events", 0, 49)
 
 
 if __name__ == "__main__":

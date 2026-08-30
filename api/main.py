@@ -62,6 +62,11 @@ def create_app() -> FastAPI:
         """Return full quota hash snapshots for all tracked keys."""
         return await _read_all_quota_status(app.state.redis)
 
+    @app.get("/continuations")
+    async def get_continuations() -> dict[str, Any]:
+        """Return recent continuation events and running summary stats."""
+        return await _read_continuation_events(app.state.redis)
+
     @app.websocket("/ws/telemetry")
     async def telemetry_socket(websocket: WebSocket) -> None:
         """Stream status snapshots and Redis telemetry updates to clients."""
@@ -137,6 +142,45 @@ async def _read_all_quota_status(redis_client) -> list[dict[str, Any]]:
         data = await redis_client.hgetall(key)
         status.append({"redis_key": key, **data})
     return status
+
+
+async def _read_continuation_events(redis_client) -> dict[str, Any]:
+    """Read last continuation events plus aggregate stats from capped Redis list."""
+    raw_recent = await redis_client.lrange("continuation_events", 0, 9)
+    raw_full = await redis_client.lrange("continuation_events", 0, 49)
+
+    recent_events: list[dict[str, Any]] = []
+    full_events: list[dict[str, Any]] = []
+    for payload in raw_recent:
+        try:
+            recent_events.append(json.loads(payload))
+        except (json.JSONDecodeError, TypeError):
+            continue
+    for payload in raw_full:
+        try:
+            full_events.append(json.loads(payload))
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+    total_count = len(full_events)
+    eligible_events = [e for e in full_events if bool(e.get("eligible_for_compression"))]
+    compressed_count = sum(1 for e in eligible_events if str(e.get("compression_used")) == "yes")
+    fallback_count = sum(int(e.get("fallback_count", 0)) for e in full_events)
+
+    avg_saved = 0.0
+    if eligible_events:
+        avg_saved = sum(float(e.get("tokens_saved_pct", 0.0)) for e in eligible_events) / len(eligible_events)
+
+    return {
+        "events": recent_events,
+        "summary": {
+            "total_count": total_count,
+            "avg_tokens_saved_pct": round(avg_saved, 2),
+            "compressed_count": compressed_count,
+            "eligible_count": len(eligible_events),
+            "fallback_count": fallback_count,
+        },
+    }
 
 
 app = create_app()
