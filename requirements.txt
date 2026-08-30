@@ -5,4 +5,5 @@ redis
 google-generativeai
 pydantic
 pytest
+pytest-asyncio
 rich

@@ -80,6 +80,10 @@ async def handle_continuation(
         )
         total_est_tokens_sent += int(compression_meta["est_tokens_sent"])
         total_est_tokens_uncompressed += int(compression_meta["est_tokens_if_uncompressed"])
+        per_attempt_saved_pct = _tokens_saved_pct(
+            int(compression_meta["est_tokens_sent"]),
+            int(compression_meta["est_tokens_if_uncompressed"]),
+        )
         if bool(compression_meta["eligible_for_compression"]):
             eligible_count += 1
         if compression_mode == "ollama_summary_plus_tail":
@@ -101,6 +105,10 @@ async def handle_continuation(
             "status": "attempting",
             "reason": decision.reason,
             "compression_mode": compression_mode,
+            "compression_used": "N/A" if domain == "CODE_GEN" else ("yes" if compression_mode == "ollama_summary_plus_tail" else "no"),
+            "est_tokens_sent": int(compression_meta["est_tokens_sent"]),
+            "est_tokens_if_uncompressed": int(compression_meta["est_tokens_if_uncompressed"]),
+            "tokens_saved_pct": round(per_attempt_saved_pct, 2),
         }
         attempts.append(attempt)
         adapter = adapters.get(decision.provider)
@@ -144,6 +152,11 @@ async def handle_continuation(
                 decision.key_id,
                 finish_reason or "unknown",
             )
+            if _is_midstream_rate_limited(adapter, completion):
+                attempt["status"] = "partial_rate_limited"
+                attempt["reason"] = "midstream_rate_limit_with_partial_output"
+                tried_key_ids.add(decision.key_id)
+                continue
             event = _build_continuation_event(
                 domain=domain,
                 initial_tried=initial_tried,
@@ -366,6 +379,30 @@ async def _persist_continuation_event(redis_client, event: dict[str, Any]) -> No
     payload = json.dumps(event)
     await redis_client.lpush("continuation_events", payload)
     await redis_client.ltrim("continuation_events", 0, 49)
+
+
+def _tokens_saved_pct(est_tokens_sent: int, est_tokens_if_uncompressed: int) -> float:
+    """Compute per-attempt compression savings percentage safely."""
+    if est_tokens_if_uncompressed <= 0:
+        return 0.0
+    return max((1 - (est_tokens_sent / est_tokens_if_uncompressed)) * 100, 0.0)
+
+
+def _is_midstream_rate_limited(adapter: ProviderAdapter, completion: str) -> bool:
+    """Check provider-equivalent mid-stream quota exhaustion signals."""
+    if not completion:
+        return False
+    status_code = getattr(adapter, "last_midstream_status_code", None)
+    if status_code == 429:
+        return True
+    if bool(getattr(adapter, "last_midstream_rate_limited", False)):
+        return True
+    signal = " ".join(
+        str(getattr(adapter, attr, "")).lower()
+        for attr in ("last_midstream_error_type", "last_midstream_error", "last_midstream_reason")
+    )
+    markers = ("429", "resourceexhausted", "rate limit", "quota", "too many requests")
+    return any(marker in signal for marker in markers)
 
 
 if __name__ == "__main__":
