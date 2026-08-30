@@ -20,13 +20,26 @@ class GeminiAdapter(ProviderAdapter):
         self.api_key = api_key
         self.redis = redis_client
         genai.configure(api_key=api_key)
+        self.last_finish_reason: str | None = None
 
     async def dispatch(self, prompt: str, **kwargs) -> tuple[str, QuotaSnapshot]:
         """Call Gemini and update self-tracked usage counters."""
         model_name = kwargs.get("model", "gemini-1.5-pro")
         model = genai.GenerativeModel(model_name=model_name)
-        response = await model.generate_content_async(prompt)
+        generation_config = None
+        max_tokens = kwargs.get("max_tokens")
+        if max_tokens is not None:
+            generation_config = {"max_output_tokens": int(max_tokens)}
+        response = await model.generate_content_async(prompt, generation_config=generation_config)
         completion = (response.text or "").strip()
+        finish_reason = None
+        candidates = getattr(response, "candidates", None)
+        if candidates:
+            finish_reason = getattr(candidates[0], "finish_reason", None)
+        if finish_reason is not None:
+            self.last_finish_reason = str(finish_reason).lower()
+        else:
+            self.last_finish_reason = None
 
         usage = getattr(response, "usage_metadata", None)
         prompt_tokens = getattr(usage, "prompt_token_count", None)

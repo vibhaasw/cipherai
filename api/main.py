@@ -93,15 +93,24 @@ def _build_adapters(redis_client) -> dict[str, Any]:
     """Instantiate provider adapters from environment variables."""
     adapters: dict[str, Any] = {}
     groq_key = os.getenv("GROQ_API_KEY")
+    groq_key_2 = os.getenv("GROQ_API_KEY_2")
     gemini_key = os.getenv("GEMINI_API_KEY")
+    gemini_key_2 = os.getenv("GEMINI_API_KEY_2")
     mistral_key = os.getenv("MISTRAL_API_KEY")
+    mistral_key_2 = os.getenv("MISTRAL_API_KEY_2")
 
     if groq_key:
         adapters["groq"] = GroqAdapter(api_key=groq_key)
+    if groq_key_2:
+        adapters["groq_2"] = GroqAdapter(api_key=groq_key_2)
     if gemini_key:
         adapters["gemini"] = GeminiAdapter(api_key=gemini_key, redis_client=redis_client)
+    if gemini_key_2:
+        adapters["gemini_2"] = GeminiAdapter(api_key=gemini_key_2, redis_client=redis_client)
     if mistral_key:
         adapters["mistral"] = MistralAdapter(api_key=mistral_key, redis_client=redis_client)
+    if mistral_key_2:
+        adapters["mistral_2"] = MistralAdapter(api_key=mistral_key_2, redis_client=redis_client)
     return adapters
 
 

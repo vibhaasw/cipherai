@@ -18,19 +18,26 @@ class GroqAdapter(ProviderAdapter):
     def __init__(self, api_key: str, base_url: str = "https://api.groq.com/openai/v1") -> None:
         self.api_key = api_key
         self.client = httpx.AsyncClient(base_url=base_url, timeout=30.0)
+        self.last_finish_reason: str | None = None
 
     async def dispatch(self, prompt: str, **kwargs) -> tuple[str, QuotaSnapshot]:
         """Send a chat completion request and parse quota headers."""
+        payload = {
+            "model": kwargs.get("model", "llama-3.1-70b-versatile"),
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": kwargs.get("temperature", 0.3),
+        }
+        max_tokens = kwargs.get("max_tokens")
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+
         resp = await self.client.post(
             "/chat/completions",
             headers={"Authorization": f"Bearer {self.api_key}"},
-            json={
-                "model": kwargs.get("model", "llama-3.1-70b-versatile"),
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": kwargs.get("temperature", 0.3),
-            },
+            json=payload,
         )
         resp.raise_for_status()
+        response_json = resp.json()
         snapshot = self.parse_headers(dict(resp.headers))
         if snapshot is None:
             snapshot = QuotaSnapshot(
@@ -42,7 +49,9 @@ class GroqAdapter(ProviderAdapter):
                 reset_tokens_at=None,
                 tracking_mode="header",
             )
-        completion = resp.json()["choices"][0]["message"]["content"]
+        choice = response_json["choices"][0]
+        self.last_finish_reason = str(choice.get("finish_reason") or "").lower() or None
+        completion = choice["message"]["content"]
         return completion, snapshot
 
     def parse_headers(self, headers: dict) -> QuotaSnapshot | None:

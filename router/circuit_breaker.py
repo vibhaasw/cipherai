@@ -132,11 +132,13 @@ async def dispatch_with_breaker(
                 decision.key_id,
                 len(attempts),
             )
+            finish_reason = str(getattr(adapter, "last_finish_reason", "") or "").lower() or None
             return {
                 "completion": completion,
                 "provider": decision.provider,
                 "model": decision.model,
                 "attempts": attempts,
+                "finish_reason": finish_reason,
             }
         except httpx.HTTPStatusError as exc:
             latency_seconds = time.perf_counter() - start

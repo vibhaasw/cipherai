@@ -18,6 +18,7 @@ from router.circuit_breaker import (
     NoHealthyProviderError,
     dispatch_with_breaker,
 )
+from router.continuation_handler import handle_continuation
 
 logger = logging.getLogger("cipherai.orchestrator.pipeline")
 
@@ -33,13 +34,29 @@ async def handle_prompt(prompt: str, redis_client, adapters: dict) -> dict[str, 
     try:
         classification = await classify_prompt(prompt)
         result = await dispatch_with_breaker(classification, prompt, redis_client, adapters)
+        attempts = list(result["attempts"])
+        completion = result["completion"]
+
+        if _needs_continuation(result):
+            tried_key_ids = {str(attempt.get("key_id")) for attempt in attempts if attempt.get("key_id")}
+            continuation = await handle_continuation(
+                original_prompt=prompt,
+                partial_output=str(result.get("partial_output") or completion),
+                domain=classification.domain,
+                redis_client=redis_client,
+                adapters=adapters,
+                tried_key_ids=tried_key_ids,
+            )
+            completion = continuation["final_output"]
+            attempts.extend(continuation["attempts"])
+
         result_payload = {
-            "completion": result["completion"],
+            "completion": completion,
             "domain": classification.domain,
             "complexity": classification.complexity,
             "provider": result["provider"],
             "model": result["model"],
-            "attempts": result["attempts"],
+            "attempts": attempts,
         }
     except NoHealthyProviderError as exc:
         result_payload = {
@@ -67,6 +84,13 @@ def _log_request_sections(prompt: str, classification, result_payload: dict[str,
     """Log readable request sections for local developer observability."""
     divider = "─" * 40
     logger.info(divider)
+
+
+def _needs_continuation(result: dict[str, Any]) -> bool:
+    """Detect cut-off or partial-output handoff conditions requiring continuation."""
+    finish_reason = str(result.get("finish_reason") or "").lower()
+    has_partial_failure = bool(result.get("midstream_failure") and result.get("partial_output"))
+    return finish_reason == "length" or has_partial_failure
     logger.info("PROMPT: %s", prompt.replace("\n", "\\n"))
     logger.info(divider)
     if classification is not None:

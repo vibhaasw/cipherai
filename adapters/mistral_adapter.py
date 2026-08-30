@@ -20,23 +20,31 @@ class MistralAdapter(ProviderAdapter):
         self.api_key = api_key
         self.redis = redis_client
         self.client = httpx.AsyncClient(base_url=base_url, timeout=30.0)
+        self.last_finish_reason: str | None = None
 
     async def dispatch(self, prompt: str, **kwargs) -> tuple[str, QuotaSnapshot]:
         """Call Mistral and update local rolling-window counters."""
+        payload = {
+            "model": kwargs.get("model", "mistral-large-latest"),
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        max_tokens = kwargs.get("max_tokens")
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+
         resp = await self.client.post(
             "/chat/completions",
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
             },
-            json={
-                "model": kwargs.get("model", "mistral-large-latest"),
-                "messages": [{"role": "user", "content": prompt}],
-            },
+            json=payload,
         )
         resp.raise_for_status()
         payload = resp.json()
-        completion = payload["choices"][0]["message"]["content"]
+        choice = payload["choices"][0]
+        completion = choice["message"]["content"]
+        self.last_finish_reason = str(choice.get("finish_reason") or "").lower() or None
         usage = payload.get("usage", {})
         used_tokens = int(usage.get("total_tokens") or max(len(prompt) // 4, 1))
 
